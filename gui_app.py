@@ -263,7 +263,9 @@ class MNISTGuiApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyTorch - MNIST CNN")
-        self.setFixedSize(1000, 600)
+        # self.setFixedSize(1000, 600)
+        self.setMinimumSize(1000, 600)
+        self.resize(1000, 600)
 
         # By default, keep the GUI and general operations on the CPU
         # The XPU is selectively targeted during the training loop for safety
@@ -757,8 +759,11 @@ class MNISTGuiApp(QMainWindow):
 
 
 if __name__ == '__main__':
+    QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+    QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     import sys
     app = QApplication(sys.argv)
+    app.setStyle("Fusion")
     gui = MNISTGuiApp()
     gui.show()
     sys.exit(app.exec_())
