@@ -393,9 +393,30 @@ class MNISTGuiApp(QMainWindow):
         config_box.setLayout(form_layout)
         layout.addWidget(config_box)
 
-        self.npu_checkbox = QCheckBox("Enable Intel XPU Acceleration")
-        self.npu_checkbox.setChecked(True)
-        layout.addWidget(self.npu_checkbox)
+        gpu_box = QGroupBox("Hardware Acceleration Target")
+        gpu_layout = QHBoxLayout()
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItem("CPU")
+
+        # Dynamically inspect the runtime environment for NVIDIA CUDA capabilities
+        if torch.cuda.is_available():
+            self.device_combo.addItem("NVIDIA CUDA (GPU)")
+
+        # Dynamically inspect the runtime environment for Intel XPU capabilities
+        if hasattr(torch, "xpu") and torch.xpu.is_available():
+            self.device_combo.addItem("Intel XPU (GPU)")
+
+        # Smart Auto-Selection: Automatically default to the most powerful detected accelerator
+        # If any GPU backend is discovered, pre-select the last added advanced device
+        if self.device_combo.count() > 1:
+            self.device_combo.setCurrentIndex(self.device_combo.count() - 1)
+
+        gpu_layout.addWidget(QLabel("Select Compute Device:"))
+        gpu_layout.addWidget(self.device_combo)
+        gpu_layout.addStretch()
+        gpu_box.setLayout(gpu_layout)
+        layout.addWidget(gpu_box)
 
         self.aug_checkbox = QCheckBox("Enable Data Augmentation (Random Affine)")
         self.aug_checkbox.setChecked(True)
@@ -605,7 +626,8 @@ class MNISTGuiApp(QMainWindow):
             train_device = torch.device("cuda")
             self.console_log.append("System: NVIDIA CUDA target selected for model training.")
         else:
-            train_device = self.device
+            train_device = torch.device("cpu")
+            self.console_log.append("Notice: Computing via standard CPU pipeline.")
 
         if self.isolate_checkbox.isChecked():
             # Safe Mode: Protect inference engine from mutating weights
