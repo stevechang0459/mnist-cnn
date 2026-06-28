@@ -88,6 +88,36 @@ pip install PyQt5 matplotlib
 > pip install -r examples/requirements.txt
 > ```
 
+### Environment Setup for DEEPX NPU
+
+If you want to compile `.onnx` to `.dxnn`, you have to install OpenCV first, then run `generate_dxnn_calibration_dataset.py` to generate calibration_dataset.
+
+```shell
+pip install opencv-python
+```
+
+Install DEEPX python packages.
+
+```shell
+# Install dx-engine
+pip install ~/Workspace/dx-all-suite/dx-runtime/dx_rt/python_package
+```
+
+```shell
+# Install dx-com
+pip install ~/Workspace/dx-all-suite/dx-compiler/dx_com/dx_com-2.3.0-cp312-cp312-manylinux_2_31_x86_64.whl
+```
+
+Uninstall DEEPX python packages (If needed).
+
+```shell
+pip uninstall dx-engine -y
+pip uninstall dx-com -y
+```
+
+> [!Note]
+> Please visit the website for complete installation instructions: [DXNN - DEEPX NPU SDK (DX-AllSuite: DEEPX All Suite)](https://github.com/DEEPX-AI/dx-all-suite)
+
 ## 🎮 How to Run
 
 Once the environment setup is complete, you can launch the interactive GUI application directly from your terminal.
