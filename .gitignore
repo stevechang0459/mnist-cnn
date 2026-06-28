@@ -1,5 +1,6 @@
 **/data
 **/models
+**/calibration_dataset
 **/__pycache__
 **/*.code-workspace
 **/.venv

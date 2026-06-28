@@ -3,6 +3,8 @@ import os
 import random
 import numpy as np
 import copy
+import subprocess
+import json
 
 import torch
 import torch.nn as nn
@@ -32,6 +34,12 @@ try:
     ONNX_AVAILABLE = True
 except ImportError:
     ONNX_AVAILABLE = False
+
+try:
+    import dx_engine
+    DEEPX_AVAILABLE = True
+except ImportError:
+    DEEPX_AVAILABLE = False
 
 # Define the local path for saving and loading PyTorch weights
 WEIGHT_PATH = "models/mnist_cnn_weights.pth"
@@ -104,6 +112,59 @@ class TrainingThread(QThread):
                                       # Allow dynamic batch sizing for flexible downstream inference pipelines
                                       dynamic_axes={'input': {0: 'batch_size'}, 'output': {0: 'batch_size'}})
                     self.log_signal.emit("ONNX compilation successful.")
+
+                    if DEEPX_AVAILABLE:
+                        dxnn_dir = os.path.dirname(self.weight_path)
+                        json_path = self.weight_path.replace('.pth', '.json')
+                        calibration_dir = os.path.abspath(os.path.join(dxnn_dir, "calibration_dataset"))
+
+                        # Preprocessing pipeline configuration specifically for the DEEPX dxcom compiler
+                        dxnn_config = {
+                            "model_name": "mnist_cnn_weights",
+                            "model_type": "ONNX",
+                            "inputs": {
+                                "input": [1, 1, 28, 28]     # Note: DEEPX strictly requires the batch size to be fixed to 1
+                            },
+                            "calibration_num": 100,
+                            "calibration_method": "ema",    # Recommended to use the EMA algorithm to improve quantization accuracy
+                            "default_loader": {
+                                "dataset_path": calibration_dir,
+                                "file_extensions": ["png", "jpg", "jpeg"],
+                                "preprocessings": [
+                                    # OpenCV reads images in [28, 28, 3] BGR format by default
+                                    { "convertColor": { "form": "BGR2GRAY" } }, # Convert to [28, 28] grayscale (Note: the channel dimension is squeezed)
+                                    {"resize": {"width": 28, "height": 28}},
+                                    { "div": { "x": 255.0 } },
+                                    { "normalize": { "mean": [0.5], "std": [0.5] } },
+                                    # CRITICAL: Must execute expandDim twice consecutively to restore [28, 28] back to the ONNX-expected [1, 1, 28, 28]
+                                    { "expandDim": { "axis": 0 } },  # First layer: Restore the Channel dimension -> [1, 28, 28]
+                                    { "expandDim": { "axis": 0 } }   # Second layer: Restore the Batch dimension -> [1, 1, 28, 28]
+                                ]
+                            }
+                        }
+
+                        with open(json_path, 'w') as f:
+                            json.dump(dxnn_config, f, indent=4)
+
+                        self.log_signal.emit(f"Generated dxcom compilation config: {json_path}")
+
+                        try:
+                            compile_cmd = [
+                                "dxcom",
+                                "-m", onnx_path,
+                                "-c", json_path,
+                                "-o", dxnn_dir,
+                                "--gen_log"
+                            ]
+                            cmd_str = " ".join(compile_cmd)
+                            self.log_signal.emit(f"Running command: {cmd_str}")
+                            result = subprocess.run(compile_cmd, capture_output=True, text=True, check=True)
+                            self.log_signal.emit("dxcom compilation successful! INT8 Model ready for NPU.")
+
+                        except subprocess.CalledProcessError as e:
+                            self.log_signal.emit(f"Warning: dxcom compilation failed.\nError: {e.stderr}")
+                        except FileNotFoundError:
+                            self.log_signal.emit("Warning: 'dxcom' command not found. Please install the DX-Compiler environment.")
 
                 if self.export_ir and OPENVINO_AVAILABLE:
                     ir_path = self.weight_path.replace('.pth', '.xml')
@@ -347,6 +408,23 @@ class MNISTGuiApp(QMainWindow):
                 QMessageBox.warning(self, "Missing File", "Please export OpenVINO IR from the Training tab first.")
                 self.engine_combo.setCurrentIndex(0)
 
+        elif "DEEPX" in selection:
+            dxnn_path = WEIGHT_PATH.replace('.pth', '.dxnn')
+            if os.path.exists(dxnn_path):
+                try:
+                    self.dx_engine = dx_engine.InferenceEngine(dxnn_path)
+                    self.active_engine = "deepx"
+                    self.engine_status.setText("Status: DX-Runtime Active")
+                    self.weights_loaded = True
+                except Exception as e:
+                    self.engine_status.setText("Status: DX-Runtime Error")
+                    QMessageBox.warning(self, "DX-Runtime Error", str(e))
+
+            else:
+                self.engine_status.setText("Status: Missing .dxnn file")
+                QMessageBox.warning(self, "Missing File", "Please compile DXNN from the Training tab first.")
+                self.engine_combo.setCurrentIndex(0)
+
         else:
             # Fallback to standard PyTorch execution
             self.load_weights_if_exists()
@@ -366,6 +444,19 @@ class MNISTGuiApp(QMainWindow):
             ort_inputs = {self.ort_session.get_inputs()[0].name: input_tensor.numpy()}
             ort_outs = self.ort_session.run(None, ort_inputs)
             return torch.tensor(ort_outs[0])
+
+        elif self.active_engine == "deepx":
+            # Since the compiler has fused div(255) and normalize into the hardware weights at the lower level,
+            # the NPU API expects to receive the raw, unprocessed pixel scale (0.0 ~ 255.0).
+            raw_inputs = (input_tensor * 0.5 + 0.5) * 255.0
+
+            # The hardware accelerator expects the underlying type to be UINT8 (not Float32) when processing fused image preprocessing.
+            # If not cast to uint8, the 4 bytes occupied by a Float32 value will be misread as 4 independent pixels by the NPU, causing severe mispredictions.
+            np_inputs = np.ascontiguousarray(raw_inputs.numpy().astype(np.uint8))
+
+            # 3. Input shape remains consistent with ONNX at [1, 1, 28, 28]
+            np_outs = self.dx_engine.run([np_inputs])
+            return torch.tensor(np_outs[0])
 
         else:
             # Native PyTorch execution path
@@ -484,6 +575,9 @@ class MNISTGuiApp(QMainWindow):
 
         if ONNX_AVAILABLE:
             self.engine_combo.addItem("ONNX Runtime (.onnx) - CPU/GPU")
+
+        if DEEPX_AVAILABLE:
+            self.engine_combo.addItem("DEEPX NPU (.dxnn)")
 
         self.engine_combo.currentIndexChanged.connect(self.reload_inference_engine)
 
