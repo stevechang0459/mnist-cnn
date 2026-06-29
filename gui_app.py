@@ -1,5 +1,6 @@
 # gui_app.py
 import os
+import sys
 import random
 import numpy as np
 import copy
@@ -14,7 +15,7 @@ from PIL import Image
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QTabWidget,
                              QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
                              QTextEdit, QProgressBar, QGroupBox, QFormLayout,
-                             QLineEdit, QMessageBox, QCheckBox, QComboBox)
+                             QLineEdit, QMessageBox, QCheckBox, QComboBox, QSizePolicy)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QPoint, QTimer
 from PyQt5.QtGui import QPixmap, QPainter, QPen, QImage, QColor
 
@@ -185,47 +186,93 @@ class TrainingThread(QThread):
 
 class GridLabel(QLabel):
     """
-    Custom QLabel that overlays a 28x28 grid to visualize exact pixel boundaries.
-    Useful for inspecting the pre-processed input tensor.
+    Custom QLabel that dynamically scales a 28x28 image to fit the layout
+    while maintaining aspect ratio and overlaying an accurate pixel grid.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.grid_size = 28  # Original MNIST image size (28x28)
-        self.cell_size = 10  # Scaled cell size (280 UI pixels / 28 data pixels = 10)
+        self.setMinimumSize(200, 200)
+        self.setAlignment(Qt.AlignCenter)
+
+        # Enforce a 1:1 aspect ratio layout policy to prevent rectangular distortion.
+        # This ensures the widget remains a perfect square during fluid layout calculations.
+        sizePolicy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        sizePolicy.setHeightForWidth(True)
+        self.setSizePolicy(sizePolicy)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, width):
+        return width
 
     def paintEvent(self, event):
-        # Render the underlying QPixmap (the actual image)
-        super().paintEvent(event)
-
-        # Only draw the grid if the pixmap exists and matches the expected 280x280 canvas size
-        if not self.pixmap() or self.pixmap().width() != 280:
+        if not self.pixmap():
+            super().paintEvent(event)
             return
 
         painter = QPainter(self)
-        # Use a semi-transparent dark gray pen to avoid overwhelming the white stroke features
+        # Dynamically scale the underlying 28x28 image to fit the current widget size
+        scaled_pix = self.pixmap().scaled(self.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
+
+        # Calculate offsets to perfectly center the image inside the label
+        x = (self.width() - scaled_pix.width()) // 2
+        y = (self.height() - scaled_pix.height()) // 2
+        painter.drawPixmap(x, y, scaled_pix)
+
+        # Overlay the grid perfectly matched to the scaled image
+        w = scaled_pix.width()
+        h = scaled_pix.height()
+        step_x = w / 28.0
+        step_y = h / 28.0
+
+        # Use a semi-transparent dark gray pen to avoid overwhelming the image features
         pen = QPen(QColor(100, 100, 100, 120), 1, Qt.SolidLine)
         painter.setPen(pen)
 
         # Draw the horizontal and vertical grid lines
-        for i in range(1, self.grid_size):
-            pos = i * self.cell_size
-            painter.drawLine(pos, 0, pos, 280)  # Vertical line
-            painter.drawLine(0, pos, 280, pos)  # Horizontal line
+        for i in range(1, 28):
+            painter.drawLine(int(x + i * step_x), y, int(x + i * step_x), y + h)
+            painter.drawLine(x, int(y + i * step_y), x + w, int(y + i * step_y))
 
 
 class DrawingCanvas(QWidget):
     """
-    Custom QWidget that acts as a black sketchpad for manual handwritten digit inputs.
-    Handles raw trajectory capture and bounding box processing.
+    Fluid responsive drawing canvas. Uses a hidden memory buffer to store ink,
+    and dynamically extracts the active visible area for inference.
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(280, 280)
-        self.pixmap = QPixmap(self.size())
+        self.setMinimumSize(200, 200)
+
+        # Enforce a 1:1 aspect ratio to perfectly align with the GridLabel dimension
+        sizePolicy = QSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        sizePolicy.setHeightForWidth(True)
+        self.setSizePolicy(sizePolicy)
+
+        # Allocate a reasonable 600x600 buffer.
+        # Since the main window is locked to 800x480, the canvas width will not exceed 256px.
+        # A 600px buffer safely accommodates up to 200%+ OS-level High DPI vector scaling
+        # without wasting unnecessary RAM compared to the legacy 2000x2000 allocation.
+        self.pixmap = QPixmap(600, 600)
         self.pixmap.fill(Qt.black)
+
         self.last_point = QPoint()
-        self.current_bbox = None  # Stores the calculated bounding box coordinates [left, upper, right, lower]
-        self.needs_clear = False  # Flag to indicate if the canvas should auto-clear on the next stroke
+        self.current_bbox = None
+        self.needs_clear = False
+
+    def hasHeightForWidth(self):
+        """
+        Informs the PyQt layout manager that this widget's height is strictly
+        dependent on its dynamically allocated width.
+        """
+        return True
+
+    def heightForWidth(self, width):
+        """
+        Locks the height to exactly match the width, maintaining a 1:1 square ratio.
+        """
+        return width
 
     def clear_canvas(self):
         self.pixmap.fill(Qt.black)
@@ -246,8 +293,11 @@ class DrawingCanvas(QWidget):
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.LeftButton:
             painter = QPainter(self.pixmap)
-            # Use a thick white pen to closely mimic the original MNIST dataset stroke distribution
-            pen = QPen(Qt.white, 18, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+
+            # Dynamically adjust pen width relative to the actual rendered canvas size
+            # This ensures the stroke thickness feels consistent regardless of High DPI scaling
+            pen_width = max(10, int(self.width() * 0.05))
+            pen = QPen(Qt.white, pen_width, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
             painter.setPen(pen)
             painter.drawLine(self.last_point, event.pos())
             self.last_point = event.pos()
@@ -255,8 +305,9 @@ class DrawingCanvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        # Always draw the base trajectory first
-        painter.drawPixmap(0, 0, self.pixmap)
+
+        # Only render the active viewport from the pre-allocated buffer
+        painter.drawPixmap(0, 0, self.pixmap, 0, 0, self.width(), self.height())
 
         # Overlay a hollow red rectangle if bounding box coordinates exist
         if self.current_bbox:
@@ -271,14 +322,16 @@ class DrawingCanvas(QWidget):
         Returns a tuple: (normalized_tensor, final_pil_image, bbox_coordinates)
         """
         bbox = None
+        # Dynamically capture current viewport dimensions
+        w, h = self.width(), self.height()
 
         if use_bbox:
             # --- [Optimized Approach: Bounding Box Extraction & Centering] ---
             # Extract the raw image buffer and convert it to a NumPy array
-            qimage = self.pixmap.toImage().convertToFormat(QImage.Format_Grayscale8)
+            qimage = self.pixmap.copy(0, 0, w, h).toImage().convertToFormat(QImage.Format_Grayscale8)
             ptr = qimage.bits()
             ptr.setsize(qimage.byteCount())
-            img_data = np.array(ptr).reshape((280, 280))
+            img_data = np.array(ptr).reshape((h, w))
             pil_img = Image.fromarray(img_data)
 
             bbox = pil_img.getbbox()
@@ -301,7 +354,7 @@ class DrawingCanvas(QWidget):
         else:
             # --- [Baseline Approach: Naive Direct Scaling] ---
             # Directly squash the 280x280 canvas down to 28x28 without alignment
-            scaled_pixmap = self.pixmap.scaled(28, 28, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            scaled_pixmap = self.pixmap.copy(0, 0, w, h).scaled(28, 28, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
             qimage = scaled_pixmap.toImage()
 
             img_data = np.zeros((28, 28), dtype=np.float32)
@@ -310,10 +363,7 @@ class DrawingCanvas(QWidget):
                     color = qimage.pixelColor(x, y)
                     img_data[y, x] = color.red() / 255.0
 
-            # Convert numpy array to PIL Image for the UI preview panel
             final_img = Image.fromarray((img_data * 255).astype(np.uint8))
-
-            # Normalize to [-1.0, 1.0]
             img_data = (img_data - 0.5) / 0.5
             tensor = torch.tensor(img_data).unsqueeze(0).unsqueeze(0)
 
@@ -324,9 +374,9 @@ class MNISTGuiApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyTorch - MNIST CNN")
-        # self.setFixedSize(1000, 600)
-        self.setMinimumSize(1000, 600)
-        self.resize(1000, 600)
+        self.setFixedSize(800, 480)
+        # self.setMinimumSize(800, 480)
+        # self.resize(800, 480)
 
         # By default, keep the GUI and general operations on the CPU
         # The XPU is selectively targeted during the training loop for safety
@@ -595,11 +645,10 @@ class MNISTGuiApp(QMainWindow):
         # Panel A: Dataset Random Sampling Component
         # ==========================================
         dataset_box = QGroupBox("Input Preview")
-        dataset_box.setFixedWidth(320)
+        dataset_box.setFixedWidth(256)
         dataset_layout = QVBoxLayout()
 
         self.dataset_img_label = GridLabel()
-        self.dataset_img_label.setFixedSize(280, 280)
         self.dataset_img_label.setAlignment(Qt.AlignCenter)
         placeholder = QPixmap(280, 280)
         placeholder.fill(Qt.black)
@@ -636,7 +685,7 @@ class MNISTGuiApp(QMainWindow):
         # Panel B: Realtime Drawing Board Component
         # ==========================================
         canvas_box = QGroupBox("Drawing Canvas")
-        canvas_box.setFixedWidth(320)
+        canvas_box.setFixedWidth(256)
         canvas_layout = QVBoxLayout()
 
         self.canvas = DrawingCanvas()
@@ -666,7 +715,7 @@ class MNISTGuiApp(QMainWindow):
         # Panel C: Probability Distribution Component
         # ==========================================
         prob_box = QGroupBox("Probability Distribution (Softmax)")
-        prob_box.setFixedWidth(320)
+        prob_box.setFixedWidth(256)
         prob_layout = QVBoxLayout()
 
         for i in range(10):
@@ -768,11 +817,8 @@ class MNISTGuiApp(QMainWindow):
         # De-normalize image from PyTorch dataset back to standard RGB visualization space
         img_np = (image_tensor.squeeze().numpy() * 0.5 + 0.5) * 255
         img_np = img_np.astype(np.uint8)
-        h, w = img_np.shape
-
-        qimg = QImage(img_np.data, w, h, w, QImage.Format_Grayscale8).copy()
-        pixmap = QPixmap.fromImage(qimg).scaled(280, 280, Qt.KeepAspectRatio, Qt.FastTransformation)
-        self.dataset_img_label.setPixmap(pixmap)
+        qimg = QImage(img_np.data, 28, 28, 28, QImage.Format_Grayscale8).copy()
+        self.dataset_img_label.setPixmap(QPixmap.fromImage(qimg))
 
         # 2. Inference Execution via Router
         input_tensor = image_tensor.unsqueeze(0)  # Keep on CPU: required format for ONNX/OpenVINO
@@ -818,8 +864,7 @@ class MNISTGuiApp(QMainWindow):
 
         # Project the processed 28x28 internal representation to the left UI panel
         qimg = QImage(processed_img.tobytes(), 28, 28, QImage.Format_Grayscale8)
-        pixmap = QPixmap.fromImage(qimg).scaled(280, 280, Qt.KeepAspectRatio, Qt.FastTransformation)
-        self.dataset_img_label.setPixmap(pixmap)
+        self.dataset_img_label.setPixmap(QPixmap.fromImage(qimg))
         self.dataset_res_label.setText("Source: Hand-drawn (Processed Image)\nReady for Inference.")
 
         # Execute Inference
@@ -877,7 +922,6 @@ class MNISTGuiApp(QMainWindow):
 if __name__ == '__main__':
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
-    import sys
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     gui = MNISTGuiApp()
