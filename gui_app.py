@@ -17,7 +17,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QTabWidget,
                              QTextEdit, QProgressBar, QGroupBox, QFormLayout,
                              QLineEdit, QMessageBox, QCheckBox, QComboBox, QSizePolicy)
 from PyQt5.QtCore import QThread, pyqtSignal, Qt, QPoint, QTimer
-from PyQt5.QtGui import QPixmap, QPainter, QPen, QImage, QColor
+from PyQt5.QtGui import QPixmap, QPainter, QPen, QImage, QColor, QFont
 
 from model import SimpleCNN
 from dataset import get_mnist_loaders
@@ -374,7 +374,10 @@ class MNISTGuiApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("PyTorch - MNIST CNN")
-        self.setFixedSize(800, 480)
+
+        # Note: Do NOT set absolute dimensions (e.g., setFixedSize) here.
+        # Hardcoded pixels will cause squashing on platforms with wider font rendering.
+        # self.setFixedSize(800, 480)
         # self.setMinimumSize(800, 480)
         # self.resize(800, 480)
 
@@ -396,6 +399,18 @@ class MNISTGuiApp(QMainWindow):
         # Verify and load pre-existing network parameters
         self.load_weights_if_exists()
         self.init_ui()
+
+        # ==========================================
+        # Dynamic Size Locking
+        # ==========================================
+        # 1. Trigger the layout manager to calculate the optimal window size based on
+        #    the enforced QSS, current DPI scaling, and physical text rendering.
+        self.adjustSize()
+
+        # 2. Freeze the window at this dynamically calculated optimal size.
+        #    This prevents the user from manually resizing and breaking the fluid aspect ratios,
+        #    while ensuring the window fits perfectly on any OS without content squashing.
+        self.setFixedSize(self.size())
 
     def load_weights_if_exists(self):
         """Attempts to load the PyTorch state dictionary safely."""
@@ -924,6 +939,39 @@ if __name__ == '__main__':
     QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+
+    # ==========================================
+    # UI Dictatorship: Cross-Platform Consistency
+    # ==========================================
+    # 1. Force a universal base font to override OS-specific defaults
+    #    (mitigating layout shifts between Windows and Ubuntu).
+    base_font = QFont("Arial", 10)
+    app.setFont(base_font)
+
+    # 2. Inject a global stylesheet (QSS) to strip native padding and margins.
+    #    This ensures the layout engine calculates identical widget footprints
+    #    regardless of the underlying desktop environment (e.g., GNOME vs. Windows DWM).
+    app.setStyleSheet("""
+        * {
+            font-family: "Arial";
+            font-size: 10pt;
+        }
+        QGroupBox {
+            margin-top: 1.5ex;
+            border: 1px solid #B0B0B0;
+            border-radius: 3px;
+            padding: 5px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top center;
+            padding: 0 5px;
+        }
+        QPushButton {
+            padding: 6px 12px;
+        }
+    """)
+    # ==========================================
     gui = MNISTGuiApp()
     gui.show()
     sys.exit(app.exec_())
