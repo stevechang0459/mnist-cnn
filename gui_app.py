@@ -167,15 +167,39 @@ class TrainingThread(QThread):
                             self.log_signal.emit("Warning: 'dxcom' command not found. Please install the DX-Compiler environment.")
 
                 if self.export_ir and OPENVINO_AVAILABLE:
-                    ir_path = self.weight_path.replace('.pth', '.xml')
+                    # Convert to absolute path to satisfy OpenVINO's C++ serialization engine
+                    ir_path = os.path.abspath(self.weight_path.replace('.pth', '.xml'))
                     self.log_signal.emit(f"Translating model to OpenVINO Intermediate Representation (IR): {ir_path}...")
                     # OpenVINO can directly convert PyTorch objects from memory
                     ov_model = ov.convert_model(self.model, example_input=dummy_input)
 
                     # Strictly lock the input shape to (1, 1, 28, 28) to satisfy NPU/GPU compiler requirements
                     ov_model.reshape([1, 1, 28, 28])
-                    ov.save_model(ov_model, ir_path)
-                    self.log_signal.emit("OpenVINO IR translation successful.")
+
+                    # ==========================================
+                    # 動態精度探測機制 (Dynamic Precision Probing)
+                    # ==========================================
+                    # 預設維持 OpenVINO 的原生最佳化優勢 (壓縮為 FP16)
+                    use_fp16 = True
+
+                    try:
+                        core = ov.Core()
+                        for device in core.available_devices:
+                            if "GPU" in device:
+                                full_name = core.get_property(device, "FULL_DEVICE_NAME")
+                                # 只要偵測到系統內插著非 Intel 的 GPU (例如你的 AMD R9 內顯或 RTX 4070)
+                                # 就強制關閉 FP16，切換為相容性最高的 FP32，避免 Kernel 崩潰
+                                if "Intel" not in full_name:
+                                    use_fp16 = False
+                                    self.log_signal.emit(f"Hardware Probe: Non-Intel GPU '{full_name}' detected. Forcing FP32 export.")
+                                    break
+                    except Exception:
+                        pass # 探測過程若發生例外，則安全降級維持預設值
+
+                    # 套用動態計算出的精度參數
+                    ov.save_model(ov_model, ir_path, compress_to_fp16=use_fp16)
+
+                    self.log_signal.emit(f"OpenVINO IR translation successful. (FP16 Compressed: {use_fp16})")
 
             self.finished_signal.emit(True)
         except Exception as e:
@@ -370,9 +394,24 @@ class MNISTGuiApp(QMainWindow):
             onnx_path = WEIGHT_PATH.replace('.pth', '.onnx')
             if os.path.exists(onnx_path):
                 try:
-                    self.ort_session = ort.InferenceSession(onnx_path)
+                    target_device = selection.split(" - ")[-1]
+                    # 解除安裝純 CPU 版本的引擎
+                    # pip uninstall onnxruntime -y
+                    # 安裝支援 CUDA 的 GPU 版本引擎
+                    # pip install onnxruntime-gpu
+                    # 1. 透過 NVIDIA 官方頻道安裝 CUDA Toolkit 13 (這會補齊 cublasLt64_13.dll)
+                    # conda install -c nvidia cuda-toolkit -y
+                    # 2. 透過 conda-forge 頻道安裝深度學習專用的 cuDNN 加速庫 (這會滿足 cuDNN 9.* 的需求)
+                    # conda install -c conda-forge cudnn -y
+                    if target_device == "CUDA":
+                        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+
+                    elif target_device == "CPU":
+                        providers = ['CPUExecutionProvider']
+
+                    self.ort_session = ort.InferenceSession(onnx_path, providers=providers)
                     self.active_engine = "onnx"
-                    self.engine_status.setText("Status: ONNX Runtime Active")
+                    self.engine_status.setText(f"Status: ONNX Runtime Active ({target_device})")
                     self.weights_loaded = True
                 except Exception as e:
                     self.engine_status.setText("Status: ONNX Error")
@@ -569,12 +608,23 @@ class MNISTGuiApp(QMainWindow):
             try:
                 core = ov.Core()
                 for device_name in core.available_devices:
+                    # 向底層驅動程式查詢硬體的完整真實名稱 (例如 "Intel(R) Arc(TM) A770 Graphics")
+                    full_name = core.get_property(device_name, "FULL_DEVICE_NAME")
+
+                    # 啟動防呆機制：如果裝置類型是 GPU，嚴格檢查其名稱是否包含 "Intel"
+                    if "GPU" in device_name:
+                        if "Intel" not in full_name:
+                            # 發現 AMD 或 NVIDIA 等非原生支援的 GPU，直接跳過不加入選單
+                            continue
+
                     self.engine_combo.addItem(f"OpenVINO IR (.xml) - {device_name}")
             except Exception:
                 self.engine_combo.addItem("OpenVINO IR (.xml) - AUTO")
 
         if ONNX_AVAILABLE:
-            self.engine_combo.addItem("ONNX Runtime (.onnx) - CPU/GPU")
+            self.engine_combo.addItem("ONNX Runtime (.onnx) - CPU")
+            if torch.cuda.is_available():
+                self.engine_combo.addItem("ONNX Runtime (.onnx) - CUDA")
 
         if DEEPX_AVAILABLE:
             self.engine_combo.addItem("DEEPX NPU (.dxnn)")

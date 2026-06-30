@@ -31,6 +31,8 @@ Step 2: Choose your hardware backend (Pick ONLY ONE)
 
 ```shell
 # Option A: Install PyTorch with NVIDIA CUDA 12.1 backend (For NVIDIA GPUs)
+conda install -c nvidia cuda-toolkit -y
+conda install -c conda-forge cudnn -y
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 ```
 
@@ -44,10 +46,17 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 Step 3: Install Edge AI runtimes and GUI dependencies
 
 ```shell
-pip install onnx onnxruntime onnxscript
+pip install onnx onnxruntime-gpu onnxscript
 pip install openvino
 pip install PyQt5 matplotlib
 ```
+
+> [!Note]
+> Alternatively, install via requirements file if provided in the repository:
+>
+> ```shell
+> pip install -r examples/requirements-nvidia.txt
+> ```
 
 ### Option 2: Python Virtual Environment (Ubuntu 24.04)
 
