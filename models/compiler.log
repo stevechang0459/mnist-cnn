@@ -1,0 +1,15 @@
+2026-06-29 18:39:54,631 - INFO - File logging enabled. Log will be saved to: models/compiler.log
+2026-06-29 18:39:54,632 - INFO - 
+2026-06-29 18:39:54,632 - INFO - ================================================================================
+2026-06-29 18:39:54,632 - INFO -   COMPILATION CONFIGURATION
+2026-06-29 18:39:54,632 - INFO - ================================================================================
+2026-06-29 18:39:54,632 - INFO -   Compiler Version : 2.3.0
+2026-06-29 18:39:54,632 - INFO -   ONNX Model       : models/mnist_cnn_weights.onnx
+2026-06-29 18:39:54,632 - INFO -   Config File      : models/mnist_cnn_weights.json
+2026-06-29 18:39:54,632 - INFO -   Output Directory : models
+2026-06-29 18:39:54,632 - INFO - ================================================================================
+2026-06-29 18:39:54,632 - INFO - 
+2026-06-29 18:39:54,736 - INFO - Final result: 1 NPU groups, 0 CPU groups
+2026-06-29 18:39:55,084 - INFO - Inserting preprocessing operations to NPU graph: 3 nodes added
+2026-06-29 18:39:55,084 - INFO - Added nodes: Div(x=255.0) -> Normalize(mean=[0.5], std=[0.5])
+2026-06-29 18:39:55,085 - INFO - Skipped nodes (cannot be inserted in NPU graph): convertColor, resize, expandDim, expandDim

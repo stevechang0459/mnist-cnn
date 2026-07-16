@@ -1,0 +1,60 @@
+{
+    "model_name": "mnist_cnn_weights",
+    "model_type": "ONNX",
+    "inputs": {
+        "input": [
+            1,
+            1,
+            28,
+            28
+        ]
+    },
+    "calibration_num": 100,
+    "calibration_method": "ema",
+    "default_loader": {
+        "dataset_path": "/home/apacer/Workspace/mnist-cnn/models/calibration_dataset",
+        "file_extensions": [
+            "png",
+            "jpg",
+            "jpeg"
+        ],
+        "preprocessings": [
+            {
+                "convertColor": {
+                    "form": "BGR2GRAY"
+                }
+            },
+            {
+                "resize": {
+                    "width": 28,
+                    "height": 28
+                }
+            },
+            {
+                "div": {
+                    "x": 255.0
+                }
+            },
+            {
+                "normalize": {
+                    "mean": [
+                        0.5
+                    ],
+                    "std": [
+                        0.5
+                    ]
+                }
+            },
+            {
+                "expandDim": {
+                    "axis": 0
+                }
+            },
+            {
+                "expandDim": {
+                    "axis": 0
+                }
+            }
+        ]
+    }
+}
